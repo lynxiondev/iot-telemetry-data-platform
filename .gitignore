@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data - no subir csv crudo pesado a GitHub
+data/raw/*.csv
+data/raw/*.json
+*.db
+*.delta
+
+# Databricks / IDE
+.dbx/
+.vscode/
+.idea/
+*.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db
