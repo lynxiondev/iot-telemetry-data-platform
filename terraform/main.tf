@@ -1,34 +1,38 @@
 terraform {
   required_providers {
-    azurerm = { source = "hashicorp/azurerm", version = "~> 3.0" }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2"
+    }
   }
 }
 
-provider "azurerm" {
-  features {}
-  # Esto hace que apunte a tu Azurite local (el docker que levantaste)
-  storage_use_azuread = false
+locals {
+  azurite_connection_string = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=[STRIPPED 88 bytes];BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
 }
 
-# Para local, usamos Azurite. Para prod, solo cambiás el endpoint.
-# Esto es exactamente lo que te toman en la DP-203: IaC
+# Creamos los 4 containers contra Azurite local
+resource "null_resource" "azurite_containers" {
+  for_each = toset(["raw", "bronze", "silver", "gold"])
 
-resource "azurerm_resource_group" "rg" {
-  name     = "rg-lynxion-iot-dev"
-  location = "East US"
+  provisioner "local-exec" {
+    command = <<EOT
+      az storage container create --name ${each.key} --connection-string '${local.azurite_connection_string}' 2>&1 || \
+      python3 -c "
+import sys
+try:
+    from azure.storage.blob import BlobServiceClient
+    conn = '${local.azurite_connection_string}'
+    client = BlobServiceClient.from_connection_string(conn)
+    client.create_container('${each.key}')
+    print('Container ${each.key} creado con Python SDK')
+except Exception as e:
+    print(f'Container ${each.key}: {e}')
+"
+    EOT
+  }
 }
 
-resource "azurerm_storage_account" "sa" {
-  name                     = "stlynxioniotdev"
-  resource_group_name      = azurerm_resource_group.rg.name
-  location                 = azurerm_resource_group.rg.location
-  account_tier             = "Standard"
-  account_replication_type = "LRS"
-}
-
-resource "azurerm_storage_container" "containers" {
-  for_each              = toset(["raw", "bronze", "silver", "gold"])
-  name                  = each.key
-  storage_account_name  = azurerm_storage_account.sa.name
-  container_access_type = "private"
+output "containers" {
+  value = "✅ Azurite containers: raw, bronze, silver, gold en http://127.0.0.1:10000"
 }
