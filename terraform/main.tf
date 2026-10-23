@@ -16,6 +16,12 @@ provider "azurerm" {
   skip_provider_registration = true
 }
 
+resource "random_string" "suffix" {
+  length  = 5
+  special = false
+  upper   = false
+}
+
 resource "azurerm_resource_group" "rg" {
   name     = "rg-lynxion-dev"
   location = "East US"
@@ -41,9 +47,17 @@ resource "azurerm_iothub" "iot" {
   name                = "iot-lynxion-zwcio"
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
+  min_tls_version     = "1.2"
 
   sku {
     name     = "F1"
     capacity = 1
   }
+}
+
+output "storage_account" {
+  value = azurerm_storage_account.sa.name
+}
+output "resource_group" {
+  value = azurerm_resource_group.rg.name
 }
