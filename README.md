@@ -55,7 +55,7 @@ Simulates a fleet of connected trucks, ingests data via **batch + streaming**, a
 ```
 ├── generator/
 │   ├── generate_iot_data_with_issues.py   # Batch CSV generator (dirty data)
-│   └── (iot hub sender)                   # Continuous sender to IoT Hub
+│   └── streaming_generator.py             # Continuous sender to IoT Hub
 ├── databricks/
 │   └── pipelines/
 │       ├── 01_Bronze_telemetry.ipynb      # Batch ingestion from ADLS
@@ -105,6 +105,9 @@ terraform apply
 ### 2. Data Generation
 - **Batch**: Run the CSV generator and upload to the `raw` container
 - **Streaming**: Run the IoT Hub sender script (leave it running to generate live messages)
+  ```bash
+  export IOTHUB_DEVICE_CONNECTION_STRING="your-device-connection-string"
+  python generator/streaming_generator.py
 
 ### 3. Databricks Pipelines
 Run the notebooks in order (or use the Databricks Job):
@@ -116,8 +119,7 @@ Run the notebooks in order (or use the Databricks Job):
 
 **Databricks Job** (all tasks successful):
 
-<!-- Subí tu captura a una carpeta docs/ o a la raíz y actualizá la ruta de abajo -->
-<!-- ![Databricks Job Success](./docs/databricks-job-success.png) -->
+ ![Databricks Job Success](./docs/job-iot-telemetry-lakehouse.png) 
 
 ---
 
