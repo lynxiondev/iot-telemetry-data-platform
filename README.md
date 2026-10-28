@@ -1,69 +1,153 @@
-# IoT Telemetry Data Platform - Medallion Lakehouse
+# IoT Telemetry Data Platform
 
-End-to-end IoT data pipeline simulating a fleet of connected trucks. Built with PySpark, Delta Lake and Databricks following the Medallion Architecture (Bronze / Silver / Gold).
+End-to-end **IoT telemetry lakehouse** on Azure.  
+Simulates a fleet of connected trucks, ingests data via **batch + streaming**, and processes it through a full **Medallion Architecture** (Bronze → Silver → Gold) using Databricks + Delta Lake.
 
-> Faceless project - no real truck data, 100% synthetic but production-ready.
+> 100% synthetic data · Production-oriented patterns · Faceless project
 
-### Architecture
+---
 
-`Generator (Python) -> GitHub Raw (CSV) -> Databricks Lakehouse`
+## Architecture
 
-*   **Bronze:** Raw ingestion via pandas bridge (Serverless pattern) + audit columns (`ingest_timestamp`, `_source`)
-*   **Silver:** Deduplication (Window by `event_id`) + Safe Cast + Quality filters
-*   **Gold:** Daily business aggregation per device
+```
+┌─────────────────────┐     ┌──────────────────────┐
+│  Generator (CSV)    │     │  Generator (IoT Hub) │
+│  Batch historical   │     │  Continuous messages │
+└─────────┬───────────┘     └──────────┬───────────┘
+          │                            │
+          ▼                            ▼
+     ADLS Gen2 (raw)  ◄──── IoT Hub endpoint + route
+          │
+          ▼
+┌─────────────────────────────────────────────────┐
+│                 Databricks                      │
+│  Bronze (batch)  +  Bronze Streaming (Auto Loader) │
+│                     ↓                           │
+│              Silver (union + quality)           │
+│                     ↓                           │
+│         Gold (daily aggregations, partitioned)  │
+└─────────────────────────────────────────────────┘
+```
 
-### Tech Stack
+**Key components:**
+- **Azure IoT Hub** → routes device messages to ADLS `raw` container
+- **Azure Data Lake Storage Gen2** (Hierarchical Namespace)
+- **Databricks** with Delta Lake (managed tables + time travel)
+- **Terraform** for infrastructure as code
 
-*   Databricks Serverless (Shared Access)
-*   PySpark + Delta Lake (Time Travel, Managed Tables)
-*   Python (Data Generator)
-*   Git + Git Folder integration
+---
 
-### Project Structure
+## Tech Stack
 
+| Layer              | Technology                          |
+|--------------------|-------------------------------------|
+| Infrastructure     | Terraform + Azure (IoT Hub, ADLS Gen2, Resource Group) |
+| Ingestion          | IoT Hub + Auto Loader (`cloudFiles`) |
+| Processing         | Databricks + PySpark + Delta Lake   |
+| Architecture       | Medallion (Bronze / Silver / Gold)  |
+| Orchestration      | Databricks Jobs                     |
+| Language           | Python / PySpark                    |
+
+---
+
+## Project Structure
+
+```
 ├── generator/
-│ └── generator.py # Generates dirty telemetry (10k rows with nulls, dups, out-of-range)
+│   ├── generate_iot_data_with_issues.py   # Batch CSV generator (dirty data)
+│   └── (iot hub sender)                   # Continuous sender to IoT Hub
 ├── databricks/
-│ └── pipelines/
-│ ├── 01_Bronze_Ingestion.ipynb # DEV: GitHub Raw | PROD: S3 + Auto Loader (commented)
-│ ├── 02_Silver_Cleaning.ipynb # Window dedup + safe cast so it doesn't break
-│ └── 03_Gold_Aggregation.ipynb # Daily summary ready for BI
-└── data/raw/ # (gitignored) dirty csv
+│   └── pipelines/
+│       ├── 01_Bronze_telemetry.ipynb      # Batch ingestion from ADLS
+│       ├── bronze_streaming.ipynb         # Streaming via Auto Loader
+│       ├── 02_Silver_Cleansing.ipynb      # Union batch+stream + quality rules
+│       └── 03_Gold_Aggregations.ipynb     # Daily business metrics (partitioned)
+├── terraform/
+│   └── main.tf                            # Full Azure infrastructure
+└── README.md
+```
 
+---
 
-### Data Quality Rules (Silver)
+## Data Flow & Layers
 
-*   `event_id`, `device_id` IS NOT NULL
-*   `speed_kmh`: 0 - 200
-*   `engine_temp_c`: -50 - 150
-*   `battery_pct`: 0 - 100 (with safe cast: 'hola' -> null -> filtered, so it doesn't break prod)
-*   Deduplication by `event_id` keeping latest `ingest_timestamp`
+### Bronze
+- **Batch**: Reads historical dirty CSV from ADLS
+- **Streaming**: Auto Loader from IoT Hub messages (base64 Body → JSON parsing)
+- Adds audit columns (`ingest_timestamp`, `_source`)
 
-### Gold Metrics
+### Silver
+- Unions batch + streaming data
+- Deduplication by `event_id` (keeps latest)
+- Safe casts for numeric fields
+- Quality filters:
+  - `event_id` / `device_id` not null
+  - `speed_kmh` between 0–200
+  - `engine_temp_c` between -50–150
+  - `battery_pct` between 0–100
 
-`gold_device_daily_summary` - one row per `device_id` per day:
+### Gold
+- Daily aggregations per `device_id`
+- Metrics: `total_events`, `avg_speed_kmh`, `avg_battery_pct`, `max/min_engine_temp_c`
+- Partitioned by `report_date` for efficient querying
 
-*   `total_events`, `avg_speed_kmh`, `avg_battery_pct`, `max/min_engine_temp_c`, `gold_processed_at`
+---
 
-### Results
+## How to Run
 
-*   **Bronze:** 10,000 rows raw -> Delta Table with `DESCRIBE HISTORY`
-*   **Silver:** ~9,200+ rows retained (quality report in notebook)
-*   **Gold:** Aggregated, ready for dashboard
+### 1. Infrastructure
+```bash
+cd terraform
+terraform init
+terraform apply
+```
 
-### How to Run
+### 2. Data Generation
+- **Batch**: Run the CSV generator and upload to the `raw` container
+- **Streaming**: Run the IoT Hub sender script (leave it running to generate live messages)
 
-1.  Clone this repo as a Git Folder in Databricks
-2.  Run `01 -> 02 -> 03`
-3.  Check `SELECT * FROM gold_device_daily_summary`
+### 3. Databricks Pipelines
+Run the notebooks in order (or use the Databricks Job):
 
-I'll use this Gold table for the Power BI dashboard.
+1. `01_Bronze_telemetry.ipynb` (batch)
+2. `bronze_streaming.ipynb` (streaming)
+3. `02_Silver_Cleansing.ipynb`
+4. `03_Gold_Aggregations.ipynb`
 
-### Next Steps
+**Databricks Job** (all tasks successful):
 
-*   Move raw source to Unity Catalog Volume `/Volumes/...` + Terraform infra (`/infra`) - ready for prod
-*   Add Auto Loader for streaming ingestion from `s3://lynxion-iot-raw-prod/`
-*   Add Great Expectations for data quality
-*   Connect Gold to Power BI / Grafana
+<!-- Subí tu captura a una carpeta docs/ o a la raíz y actualizá la ruta de abajo -->
+<!-- ![Databricks Job Success](./docs/databricks-job-success.png) -->
 
-Built as a learning path to Data Engineering.
+---
+
+## Key Design Decisions
+
+- **Medallion Architecture** for clear separation of concerns and data quality progression
+- **Batch + Streaming union** in Silver so both historical and live data share the same cleaning logic
+- **Safe casts** to prevent pipeline failures on dirty data
+- **Delta Lake** for ACID transactions, time travel and schema enforcement
+- **Terraform** for reproducible infrastructure
+- **Partitioning** in Gold for dashboard performance
+
+---
+
+## Results
+
+- Bronze: Raw telemetry (batch + stream) landed as Delta tables
+- Silver: Cleaned & deduplicated dataset ready for analytics
+- Gold: Business-ready daily summary per device (`gold_device_daily_summary`)
+
+---
+
+## Future Improvements
+
+- Continuous streaming trigger (instead of `availableNow`)
+- Watermarking + late-arriving data handling
+- Data quality framework (Great Expectations / dbt tests)
+- CI/CD for Terraform + notebooks
+- Power BI / Grafana dashboard on Gold layer
+
+---
+
+**Built as a hands-on Data Engineering project focused on real Azure IoT + Lakehouse patterns.**
